@@ -1,4 +1,5 @@
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 import cnn_lstm.utils as util
 import numpy as np
 import os
@@ -21,8 +22,8 @@ def tensor_variable(shape, name):
     Tensor variable declaration initialization
     """
     variable = tf.Variable(tf.zeros(shape), name=name)
-    variable = tf.compat.v1.get_variable(name, shape=shape, 
-                                        initializer=tf.contrib.layers.xavier_initializer())
+    variable = tf.get_variable(name, shape=shape,
+                              initializer=tf.keras.initializers.glorot_uniform())
     return variable
 
 
