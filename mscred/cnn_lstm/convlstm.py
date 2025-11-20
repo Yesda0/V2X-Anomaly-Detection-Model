@@ -1,6 +1,6 @@
 import tensorflow.compat.v1 as tf
 tf.disable_v2_behavior()
-import cnn_lstm.utils as util
+import utils as util
 import numpy as np
 import os
 
