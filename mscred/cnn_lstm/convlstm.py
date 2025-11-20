@@ -96,24 +96,24 @@ def tensor_variable(shape, name):
 
 def cnn_encoder(data):
     """
-    ===== 10x10 입력에 맞게 CNN 구조 설계 =====
-    입력: 5 * 10 * 10 * 3 (step_max, n_sensors, n_sensors, win_sizes)
-    
-    10x10 구조:
-    10x10 -> 10x10 -> 5x5 -> 3x3
+    ===== 7x7 입력에 맞게 CNN 구조 설계 =====
+    입력: 5 * 7 * 7 * 3 (step_max, n_sensors, n_sensors, win_sizes)
+
+    7x7 구조:
+    7x7 -> 7x7 -> 4x4 -> 2x2
     """
-    
-    # First layer: 10x10x3 -> 10x10x32
+
+    # First layer: 7x7x3 -> 7x7x32
     filter1 = tensor_variable([3, 3, 3, 32], "filter1")
     strides1 = (1, 1, 1, 1)
     cnn1_out = cnn_encoder_layer(data, filter1, strides1)
 
-    # Second layer: 10x10x32 -> 5x5x64
+    # Second layer: 7x7x32 -> 4x4x64
     filter2 = tensor_variable([3, 3, 32, 64], "filter2")
     strides2 = (1, 2, 2, 1)  # stride=2로 크기 절반
     cnn2_out = cnn_encoder_layer(cnn1_out, filter2, strides2)
 
-    # Third layer: 5x5x64 -> 3x3x128
+    # Third layer: 4x4x64 -> 2x2x128
     filter3 = tensor_variable([3, 3, 64, 128], "filter3")
     strides3 = (1, 2, 2, 1)
     cnn3_out = cnn_encoder_layer(cnn2_out, filter3, strides3)
@@ -167,23 +167,23 @@ def cnn_decoder_layer(conv_lstm_out_c, filter, output_shape, strides):
 
 def cnn_decoder(lstm1_out, lstm2_out, lstm3_out):
     """
-    ===== 10x10 출력에 맞게 Decoder 설계 =====
-    역순으로 복원: 3x3 -> 5x5 -> 10x10
+    ===== 7x7 출력에 맞게 Decoder 설계 =====
+    역순으로 복원: 2x2 -> 4x4 -> 7x7
     """
-    
-    # 3x3x128 -> 5x5x64
+
+    # 2x2x128 -> 4x4x64
     d_filter3 = tensor_variable([3, 3, 64, 128], "d_filter3")
-    dec3 = cnn_decoder_layer(lstm3_out, d_filter3, [1, 5, 5, 64], (1, 2, 2, 1))
+    dec3 = cnn_decoder_layer(lstm3_out, d_filter3, [1, 4, 4, 64], (1, 2, 2, 1))
     dec3_concat = tf.concat([dec3, lstm2_out], axis=3)
 
-    # 5x5x128 -> 10x10x32
+    # 4x4x128 -> 7x7x32
     d_filter2 = tensor_variable([3, 3, 32, 128], "d_filter2")
-    dec2 = cnn_decoder_layer(dec3_concat, d_filter2, [1, 10, 10, 32], (1, 2, 2, 1))
+    dec2 = cnn_decoder_layer(dec3_concat, d_filter2, [1, 7, 7, 32], (1, 2, 2, 1))
     dec2_concat = tf.concat([dec2, lstm1_out], axis=3)
 
-    # 10x10x64 -> 10x10x3
+    # 7x7x64 -> 7x7x3
     d_filter1 = tensor_variable([3, 3, 3, 64], "d_filter1")
-    dec1 = cnn_decoder_layer(dec2_concat, d_filter1, [1, 10, 10, 3], (1, 1, 1, 1))
+    dec1 = cnn_decoder_layer(dec2_concat, d_filter1, [1, 7, 7, 3], (1, 1, 1, 1))
 
     return dec1
 
@@ -194,20 +194,20 @@ def main():
     matrix_gt_1 = np.load(matrix_data_path)
     
     print("Train data shape:", matrix_gt_1.shape)
-    # 예상: (샘플 수, step_max=5, 10, 10, 3)
+    # 예상: (샘플 수, step_max=5, 7, 7, 3)
 
     sess = tf.Session()
-    
-    # ===== placeholder 크기: 10x10 =====
-    data_input = tf.compat.v1.placeholder(tf.float32, [util.step_max, 10, 10, 3])
+
+    # ===== placeholder 크기: 7x7 =====
+    data_input = tf.compat.v1.placeholder(tf.float32, [util.step_max, 7, 7, 3])
 
     # CNN encoder
     conv1_out, conv2_out, conv3_out = cnn_encoder(data_input)
 
-    # ===== reshape 크기 조정 (10x10 기준) =====
-    conv1_out = tf.reshape(conv1_out, [-1, util.step_max, 10, 10, 32])
-    conv2_out = tf.reshape(conv2_out, [-1, util.step_max, 5, 5, 64])
-    conv3_out = tf.reshape(conv3_out, [-1, util.step_max, 3, 3, 128])
+    # ===== reshape 크기 조정 (7x7 기준) =====
+    conv1_out = tf.reshape(conv1_out, [-1, util.step_max, 7, 7, 32])
+    conv2_out = tf.reshape(conv2_out, [-1, util.step_max, 4, 4, 64])
+    conv3_out = tf.reshape(conv3_out, [-1, util.step_max, 2, 2, 128])
 
     # LSTM with attention
     conv1_lstm_attention_out, atten_weight_1 = cnn_lstm_attention_layer(conv1_out, 1)
