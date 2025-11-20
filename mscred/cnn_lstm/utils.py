@@ -51,5 +51,5 @@ alpha = 1.5
 
 # Sensor configuration
 n_sensor = 7  # 숫자형 센서만 사용할 경우
-sensor_columns = ['lat_deg', 'lon_deg', 'speed_km', '원효대교', 
+sensor_columns = ['lat_deg', 'lon_deg', 'speed_kmh', '원효대교',
                   '숙명여대', 'travelTime', 'speed']
