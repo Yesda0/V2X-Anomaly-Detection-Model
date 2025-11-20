@@ -220,17 +220,30 @@ def main():
     
     # Loss function: reconstruction error of last step matrix
     loss = tf.reduce_mean(tf.square(data_input[-1] - deconv_out))
-    optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=util.learning_rate).minimize(loss)
+
+    # Gradient clipping to prevent NaN loss
+    optimizer_op = tf.compat.v1.train.AdamOptimizer(learning_rate=util.learning_rate)
+    gradients, variables = zip(*optimizer_op.compute_gradients(loss))
+    gradients, _ = tf.clip_by_global_norm(gradients, 5.0)  # Clip gradients
+    optimizer = optimizer_op.apply_gradients(zip(gradients, variables))
 
     # Variable initialization
     init = tf.global_variables_initializer()
     sess.run(init)
 
+    # ===== 데이터 검증 =====
+    print("\nChecking data for NaN or Inf values...")
+    if np.isnan(matrix_gt_1).any():
+        print("WARNING: Training data contains NaN values!")
+    if np.isinf(matrix_gt_1).any():
+        print("WARNING: Training data contains Inf values!")
+    print(f"Data range: min={np.min(matrix_gt_1):.6f}, max={np.max(matrix_gt_1):.6f}")
+
     # ===== 학습 루프 =====
     print("\n" + "="*50)
     print("Starting training...")
     print("="*50)
-    
+
     num_train_samples = matrix_gt_1.shape[0]
     
     for epoch in range(util.training_iters):
@@ -240,7 +253,17 @@ def main():
             feed_dict = {data_input: np.asarray(matrix_gt)}
             _, loss_value = sess.run([optimizer, loss], feed_dict)
             total_loss += loss_value
-        
+
+            # Debug: Print first few losses in first epoch
+            if epoch == 0 and idx < 5:
+                print(f"  Sample {idx+1} loss: {loss_value:.6f}")
+
+            # Check for NaN
+            if np.isnan(loss_value):
+                print(f"ERROR: NaN loss detected at epoch {epoch+1}, sample {idx+1}")
+                print(f"Data stats - min: {np.min(matrix_gt)}, max: {np.max(matrix_gt)}")
+                break
+
         avg_loss = total_loss / num_train_samples
         print(f"Epoch {epoch+1}/{util.training_iters}, Average Loss: {avg_loss:.6f}")
         
@@ -281,7 +304,7 @@ def main():
         if not os.path.exists(valid_reconstructed_path):
             os.makedirs(valid_reconstructed_path)
         
-        valid_result_all = np.asarray(valid_result_all).reshape((-1, 10, 10, 3))
+        valid_result_all = np.asarray(valid_result_all).reshape((-1, 7, 7, 3))
         np.save(os.path.join(valid_reconstructed_path, "valid_reconstructed.npy"), 
                 valid_result_all)
         print(f"Valid reconstructed data saved: {valid_result_all.shape}")
@@ -315,13 +338,13 @@ def main():
     avg_test_loss = test_loss_total / num_test_samples
     print(f"Average Test Loss: {avg_test_loss:.6f}")
 
-    # ===== Test reconstruction 저장 (10x10x3) =====
+    # ===== Test reconstruction 저장 (7x7x3) =====
     reconstructed_path = util.reconstructed_data_path
     if not os.path.exists(reconstructed_path):
         os.makedirs(reconstructed_path)
     reconstructed_path = reconstructed_path + "test_reconstructed.npy"
 
-    result_all = np.asarray(result_all).reshape((-1, 10, 10, 3))
+    result_all = np.asarray(result_all).reshape((-1, 7, 7, 3))
     print("Test reconstructed data shape:", result_all.shape)
     np.save(reconstructed_path, result_all)
     
