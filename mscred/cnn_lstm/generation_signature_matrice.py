@@ -24,14 +24,33 @@ class SignatureMatrices:
             file_path = os.path.join(util.data_dir, file_name)
             df = pd.read_csv(file_path)
             sensor_data = df[util.sensor_columns].values
+
+            # NaN 체크
+            if np.isnan(sensor_data).any():
+                nan_count = np.isnan(sensor_data).sum()
+                print(f"WARNING: {file_name} contains {nan_count} NaN values")
+                # NaN을 0으로 대체 (또는 다른 전략 사용)
+                sensor_data = np.nan_to_num(sensor_data, nan=0.0)
+
             data_list.append(sensor_data)
 
         train_data = np.vstack(data_list)
+        print(f"Combined data shape: {train_data.shape}")
+        print(f"Data range before scaling: min={np.min(train_data):.4f}, max={np.max(train_data):.4f}")
 
         scaler = StandardScaler()
         train_data = scaler.fit_transform(train_data)
 
-        
+        # 스케일링 후 NaN 체크
+        if np.isnan(train_data).any():
+            print(f"ERROR: Data contains NaN after scaling!")
+            print(f"NaN count: {np.isnan(train_data).sum()}")
+            # 디버깅: 각 컬럼의 평균과 표준편차 확인
+            print("Scaler mean:", scaler.mean_)
+            print("Scaler scale:", scaler.scale_)
+
+        print(f"Data range after scaling: min={np.min(train_data):.4f}, max={np.max(train_data):.4f}")
+
         self.raw_data = train_data.T
         self.series_number = self.raw_data.shape[0]
         self.series_length = self.raw_data.shape[1]
@@ -107,13 +126,29 @@ class SignatureMatricesValidTest:
             file_path = os.path.join(util.data_dir, file_name)
             df = pd.read_csv(file_path)
             sensor_data = df[util.sensor_columns].values
+
+            # NaN 체크
+            if np.isnan(sensor_data).any():
+                nan_count = np.isnan(sensor_data).sum()
+                print(f"WARNING: {file_name} contains {nan_count} NaN values")
+                sensor_data = np.nan_to_num(sensor_data, nan=0.0)
+
             data_list.append(sensor_data)
-        
+
         combined_data = np.vstack(data_list)
-        
+        print(f"Combined {data_type} data shape: {combined_data.shape}")
+        print(f"Data range before scaling: min={np.min(combined_data):.4f}, max={np.max(combined_data):.4f}")
+
         # 정규화 (Train에서 학습한 scaler 사용해야 함 - 여기서는 단순화)
         scaler = StandardScaler()
         combined_data = scaler.fit_transform(combined_data)
+
+        # 스케일링 후 NaN 체크
+        if np.isnan(combined_data).any():
+            print(f"ERROR: {data_type} data contains NaN after scaling!")
+            print(f"NaN count: {np.isnan(combined_data).sum()}")
+
+        print(f"Data range after scaling: min={np.min(combined_data):.4f}, max={np.max(combined_data):.4f}")
         
         # Transpose
         self.raw_data = combined_data.T
