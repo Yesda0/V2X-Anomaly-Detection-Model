@@ -5,6 +5,73 @@ import numpy as np
 import os
 
 
+class ConvLSTMCell(tf.nn.rnn_cell.RNNCell):
+    """ConvLSTM cell implementation for TensorFlow 2.x compatibility"""
+
+    def __init__(self, conv_ndims, input_shape, output_channels, kernel_shape,
+                 use_bias=True, skip_connection=False, forget_bias=1.0,
+                 initializers=None, name="conv_lstm_cell"):
+        super(ConvLSTMCell, self).__init__(name=name)
+        self._conv_ndims = conv_ndims
+        self._input_shape = input_shape
+        self._output_channels = output_channels
+        self._kernel_shape = kernel_shape
+        self._use_bias = use_bias
+        self._forget_bias = forget_bias
+        self._skip_connection = skip_connection
+        self._size = tf.TensorShape(input_shape[:2] + [output_channels])
+        self._feature_axis = self._conv_ndims
+
+    @property
+    def state_size(self):
+        return tf.nn.rnn_cell.LSTMStateTuple(self._size, self._size)
+
+    @property
+    def output_size(self):
+        return self._size
+
+    def call(self, inputs, state):
+        cell_state, hidden_state = state
+
+        # Concatenate inputs and hidden state
+        concat_inputs = tf.concat([inputs, hidden_state], axis=-1)
+
+        # Define kernel shape for gates
+        kernel_shape = self._kernel_shape + [concat_inputs.shape[-1], 4 * self._output_channels]
+
+        # Initialize kernels
+        kernel = tf.get_variable(
+            'kernel', kernel_shape,
+            initializer=tf.keras.initializers.glorot_uniform())
+
+        # Convolution for all gates (input, forget, output, candidate)
+        gates = tf.nn.conv2d(
+            concat_inputs, kernel,
+            strides=[1, 1, 1, 1],
+            padding='SAME')
+
+        if self._use_bias:
+            bias = tf.get_variable(
+                'bias', [4 * self._output_channels],
+                initializer=tf.zeros_initializer())
+            gates = tf.nn.bias_add(gates, bias)
+
+        # Split gates
+        input_gate, new_input, forget_gate, output_gate = tf.split(
+            gates, 4, axis=-1)
+
+        # Apply activations
+        new_cell = tf.nn.sigmoid(forget_gate + self._forget_bias) * cell_state
+        new_cell += tf.nn.sigmoid(input_gate) * tf.nn.tanh(new_input)
+        output = tf.nn.tanh(new_cell) * tf.nn.sigmoid(output_gate)
+
+        if self._skip_connection:
+            output += inputs
+
+        new_state = tf.nn.rnn_cell.LSTMStateTuple(new_cell, output)
+        return output, new_state
+
+
 def cnn_encoder_layer(data, filter_layer, strides):
     """
     CNN encoder layer with SELU activation
@@ -58,7 +125,7 @@ def cnn_lstm_attention_layer(input_data, layer_number):
     """
     ConvLSTM layer with attention mechanism
     """
-    convlstm_layer = tf.contrib.rnn.ConvLSTMCell(
+    convlstm_layer = ConvLSTMCell(
         conv_ndims=2,
         input_shape=[input_data.shape[2], input_data.shape[3], input_data.shape[4]],
         output_channels=input_data.shape[-1],
