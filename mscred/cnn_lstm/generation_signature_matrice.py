@@ -18,13 +18,15 @@ class SignatureMatrices:
 
         print("Loading multiple CSV files...")
 
-        train_data, _, _ = util.load_train_valid_test_data(
-                util.train_files,
-                util.valid_files,
-                util.test_files,
-                util.data_dir,
-                util.sensor_columns
-        )
+        # Train 데이터 로드
+        data_list = []
+        for file_name in util.train_files:
+            file_path = os.path.join(util.data_dir, file_name)
+            df = pd.read_csv(file_path)
+            sensor_data = df[util.sensor_columns].values
+            data_list.append(sensor_data)
+
+        train_data = np.vstack(data_list)
 
         scaler = StandardScaler()
         train_data = scaler.fit_transform(train_data)
@@ -178,7 +180,7 @@ if __name__ == '__main__':
     print("\nTrain signature_matrices shape:", train_signature_matrices.shape)
     # 예상: (3, signature_matrices_number, 7, 7)
 
-    train_matrices.generate_train_test_valid(train_signature_matrices)
+    train_matrices.generate_train_test(train_signature_matrices)
 
     # ===== Valid 데이터 처리 =====
     print("\n" + "="*50)
