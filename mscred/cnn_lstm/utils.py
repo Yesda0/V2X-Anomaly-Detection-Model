@@ -47,9 +47,9 @@ training_iters = 50
 save_model_step = 1
 learning_rate = 0.0002
 threshold = 0.005
-alpha = 1.5
+alpha = 0.8  # Lowered to detect more anomalies (was 1.5)
 
 # Sensor configuration
 n_sensor = 7  # 숫자형 센서만 사용할 경우
-sensor_columns = ['lat_deg', 'lon_deg', 'speed_km', '원효대교', 
+sensor_columns = ['lat_deg', 'lon_deg', 'speed_kmh', '원효대교',
                   '숙명여대', 'travelTime', 'speed']

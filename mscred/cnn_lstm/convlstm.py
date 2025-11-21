@@ -1,7 +1,75 @@
-import tensorflow as tf
-import cnn_lstm.utils as util
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
+import utils as util
 import numpy as np
 import os
+
+
+class ConvLSTMCell(tf.nn.rnn_cell.RNNCell):
+    """ConvLSTM cell implementation for TensorFlow 2.x compatibility"""
+
+    def __init__(self, conv_ndims, input_shape, output_channels, kernel_shape,
+                 use_bias=True, skip_connection=False, forget_bias=1.0,
+                 initializers=None, name="conv_lstm_cell"):
+        super(ConvLSTMCell, self).__init__(name=name)
+        self._conv_ndims = conv_ndims
+        self._input_shape = input_shape
+        self._output_channels = output_channels
+        self._kernel_shape = kernel_shape
+        self._use_bias = use_bias
+        self._forget_bias = forget_bias
+        self._skip_connection = skip_connection
+        self._size = tf.TensorShape(input_shape[:2] + [output_channels])
+        self._feature_axis = self._conv_ndims
+
+    @property
+    def state_size(self):
+        return tf.nn.rnn_cell.LSTMStateTuple(self._size, self._size)
+
+    @property
+    def output_size(self):
+        return self._size
+
+    def call(self, inputs, state):
+        cell_state, hidden_state = state
+
+        # Concatenate inputs and hidden state
+        concat_inputs = tf.concat([inputs, hidden_state], axis=-1)
+
+        # Define kernel shape for gates
+        kernel_shape = self._kernel_shape + [concat_inputs.shape[-1], 4 * self._output_channels]
+
+        # Initialize kernels
+        kernel = tf.get_variable(
+            'kernel', kernel_shape,
+            initializer=tf.keras.initializers.glorot_uniform())
+
+        # Convolution for all gates (input, forget, output, candidate)
+        gates = tf.nn.conv2d(
+            concat_inputs, kernel,
+            strides=[1, 1, 1, 1],
+            padding='SAME')
+
+        if self._use_bias:
+            bias = tf.get_variable(
+                'bias', [4 * self._output_channels],
+                initializer=tf.zeros_initializer())
+            gates = tf.nn.bias_add(gates, bias)
+
+        # Split gates
+        input_gate, new_input, forget_gate, output_gate = tf.split(
+            gates, 4, axis=-1)
+
+        # Apply activations
+        new_cell = tf.nn.sigmoid(forget_gate + self._forget_bias) * cell_state
+        new_cell += tf.nn.sigmoid(input_gate) * tf.nn.tanh(new_input)
+        output = tf.nn.tanh(new_cell) * tf.nn.sigmoid(output_gate)
+
+        if self._skip_connection:
+            output += inputs
+
+        new_state = tf.nn.rnn_cell.LSTMStateTuple(new_cell, output)
+        return output, new_state
 
 
 def cnn_encoder_layer(data, filter_layer, strides):
@@ -21,31 +89,31 @@ def tensor_variable(shape, name):
     Tensor variable declaration initialization
     """
     variable = tf.Variable(tf.zeros(shape), name=name)
-    variable = tf.compat.v1.get_variable(name, shape=shape, 
-                                        initializer=tf.contrib.layers.xavier_initializer())
+    variable = tf.get_variable(name, shape=shape,
+                              initializer=tf.keras.initializers.glorot_uniform())
     return variable
 
 
 def cnn_encoder(data):
     """
-    ===== 10x10 입력에 맞게 CNN 구조 설계 =====
-    입력: 5 * 10 * 10 * 3 (step_max, n_sensors, n_sensors, win_sizes)
-    
-    10x10 구조:
-    10x10 -> 10x10 -> 5x5 -> 3x3
+    ===== 7x7 입력에 맞게 CNN 구조 설계 =====
+    입력: 5 * 7 * 7 * 3 (step_max, n_sensors, n_sensors, win_sizes)
+
+    7x7 구조:
+    7x7 -> 7x7 -> 4x4 -> 2x2
     """
-    
-    # First layer: 10x10x3 -> 10x10x32
+
+    # First layer: 7x7x3 -> 7x7x32
     filter1 = tensor_variable([3, 3, 3, 32], "filter1")
     strides1 = (1, 1, 1, 1)
     cnn1_out = cnn_encoder_layer(data, filter1, strides1)
 
-    # Second layer: 10x10x32 -> 5x5x64
+    # Second layer: 7x7x32 -> 4x4x64
     filter2 = tensor_variable([3, 3, 32, 64], "filter2")
     strides2 = (1, 2, 2, 1)  # stride=2로 크기 절반
     cnn2_out = cnn_encoder_layer(cnn1_out, filter2, strides2)
 
-    # Third layer: 5x5x64 -> 3x3x128
+    # Third layer: 4x4x64 -> 2x2x128
     filter3 = tensor_variable([3, 3, 64, 128], "filter3")
     strides3 = (1, 2, 2, 1)
     cnn3_out = cnn_encoder_layer(cnn2_out, filter3, strides3)
@@ -57,7 +125,7 @@ def cnn_lstm_attention_layer(input_data, layer_number):
     """
     ConvLSTM layer with attention mechanism
     """
-    convlstm_layer = tf.contrib.rnn.ConvLSTMCell(
+    convlstm_layer = ConvLSTMCell(
         conv_ndims=2,
         input_shape=[input_data.shape[2], input_data.shape[3], input_data.shape[4]],
         output_channels=input_data.shape[-1],
@@ -99,23 +167,23 @@ def cnn_decoder_layer(conv_lstm_out_c, filter, output_shape, strides):
 
 def cnn_decoder(lstm1_out, lstm2_out, lstm3_out):
     """
-    ===== 10x10 출력에 맞게 Decoder 설계 =====
-    역순으로 복원: 3x3 -> 5x5 -> 10x10
+    ===== 7x7 출력에 맞게 Decoder 설계 =====
+    역순으로 복원: 2x2 -> 4x4 -> 7x7
     """
-    
-    # 3x3x128 -> 5x5x64
+
+    # 2x2x128 -> 4x4x64
     d_filter3 = tensor_variable([3, 3, 64, 128], "d_filter3")
-    dec3 = cnn_decoder_layer(lstm3_out, d_filter3, [1, 5, 5, 64], (1, 2, 2, 1))
+    dec3 = cnn_decoder_layer(lstm3_out, d_filter3, [1, 4, 4, 64], (1, 2, 2, 1))
     dec3_concat = tf.concat([dec3, lstm2_out], axis=3)
 
-    # 5x5x128 -> 10x10x32
+    # 4x4x128 -> 7x7x32
     d_filter2 = tensor_variable([3, 3, 32, 128], "d_filter2")
-    dec2 = cnn_decoder_layer(dec3_concat, d_filter2, [1, 10, 10, 32], (1, 2, 2, 1))
+    dec2 = cnn_decoder_layer(dec3_concat, d_filter2, [1, 7, 7, 32], (1, 2, 2, 1))
     dec2_concat = tf.concat([dec2, lstm1_out], axis=3)
 
-    # 10x10x64 -> 10x10x3
+    # 7x7x64 -> 7x7x3
     d_filter1 = tensor_variable([3, 3, 3, 64], "d_filter1")
-    dec1 = cnn_decoder_layer(dec2_concat, d_filter1, [1, 10, 10, 3], (1, 1, 1, 1))
+    dec1 = cnn_decoder_layer(dec2_concat, d_filter1, [1, 7, 7, 3], (1, 1, 1, 1))
 
     return dec1
 
@@ -126,20 +194,20 @@ def main():
     matrix_gt_1 = np.load(matrix_data_path)
     
     print("Train data shape:", matrix_gt_1.shape)
-    # 예상: (샘플 수, step_max=5, 10, 10, 3)
+    # 예상: (샘플 수, step_max=5, 7, 7, 3)
 
     sess = tf.Session()
-    
-    # ===== placeholder 크기: 10x10 =====
-    data_input = tf.compat.v1.placeholder(tf.float32, [util.step_max, 10, 10, 3])
+
+    # ===== placeholder 크기: 7x7 =====
+    data_input = tf.compat.v1.placeholder(tf.float32, [util.step_max, 7, 7, 3])
 
     # CNN encoder
     conv1_out, conv2_out, conv3_out = cnn_encoder(data_input)
 
-    # ===== reshape 크기 조정 (10x10 기준) =====
-    conv1_out = tf.reshape(conv1_out, [-1, util.step_max, 10, 10, 32])
-    conv2_out = tf.reshape(conv2_out, [-1, util.step_max, 5, 5, 64])
-    conv3_out = tf.reshape(conv3_out, [-1, util.step_max, 3, 3, 128])
+    # ===== reshape 크기 조정 (7x7 기준) =====
+    conv1_out = tf.reshape(conv1_out, [-1, util.step_max, 7, 7, 32])
+    conv2_out = tf.reshape(conv2_out, [-1, util.step_max, 4, 4, 64])
+    conv3_out = tf.reshape(conv3_out, [-1, util.step_max, 2, 2, 128])
 
     # LSTM with attention
     conv1_lstm_attention_out, atten_weight_1 = cnn_lstm_attention_layer(conv1_out, 1)
@@ -152,17 +220,30 @@ def main():
     
     # Loss function: reconstruction error of last step matrix
     loss = tf.reduce_mean(tf.square(data_input[-1] - deconv_out))
-    optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=util.learning_rate).minimize(loss)
+
+    # Gradient clipping to prevent NaN loss
+    optimizer_op = tf.compat.v1.train.AdamOptimizer(learning_rate=util.learning_rate)
+    gradients, variables = zip(*optimizer_op.compute_gradients(loss))
+    gradients, _ = tf.clip_by_global_norm(gradients, 5.0)  # Clip gradients
+    optimizer = optimizer_op.apply_gradients(zip(gradients, variables))
 
     # Variable initialization
     init = tf.global_variables_initializer()
     sess.run(init)
 
+    # ===== 데이터 검증 =====
+    print("\nChecking data for NaN or Inf values...")
+    if np.isnan(matrix_gt_1).any():
+        print("WARNING: Training data contains NaN values!")
+    if np.isinf(matrix_gt_1).any():
+        print("WARNING: Training data contains Inf values!")
+    print(f"Data range: min={np.min(matrix_gt_1):.6f}, max={np.max(matrix_gt_1):.6f}")
+
     # ===== 학습 루프 =====
     print("\n" + "="*50)
     print("Starting training...")
     print("="*50)
-    
+
     num_train_samples = matrix_gt_1.shape[0]
     
     for epoch in range(util.training_iters):
@@ -172,7 +253,17 @@ def main():
             feed_dict = {data_input: np.asarray(matrix_gt)}
             _, loss_value = sess.run([optimizer, loss], feed_dict)
             total_loss += loss_value
-        
+
+            # Debug: Print first few losses in first epoch
+            if epoch == 0 and idx < 5:
+                print(f"  Sample {idx+1} loss: {loss_value:.6f}")
+
+            # Check for NaN
+            if np.isnan(loss_value):
+                print(f"ERROR: NaN loss detected at epoch {epoch+1}, sample {idx+1}")
+                print(f"Data stats - min: {np.min(matrix_gt)}, max: {np.max(matrix_gt)}")
+                break
+
         avg_loss = total_loss / num_train_samples
         print(f"Epoch {epoch+1}/{util.training_iters}, Average Loss: {avg_loss:.6f}")
         
@@ -213,7 +304,7 @@ def main():
         if not os.path.exists(valid_reconstructed_path):
             os.makedirs(valid_reconstructed_path)
         
-        valid_result_all = np.asarray(valid_result_all).reshape((-1, 10, 10, 3))
+        valid_result_all = np.asarray(valid_result_all).reshape((-1, 7, 7, 3))
         np.save(os.path.join(valid_reconstructed_path, "valid_reconstructed.npy"), 
                 valid_result_all)
         print(f"Valid reconstructed data saved: {valid_result_all.shape}")
@@ -247,13 +338,13 @@ def main():
     avg_test_loss = test_loss_total / num_test_samples
     print(f"Average Test Loss: {avg_test_loss:.6f}")
 
-    # ===== Test reconstruction 저장 (10x10x3) =====
+    # ===== Test reconstruction 저장 (7x7x3) =====
     reconstructed_path = util.reconstructed_data_path
     if not os.path.exists(reconstructed_path):
         os.makedirs(reconstructed_path)
     reconstructed_path = reconstructed_path + "test_reconstructed.npy"
 
-    result_all = np.asarray(result_all).reshape((-1, 10, 10, 3))
+    result_all = np.asarray(result_all).reshape((-1, 7, 7, 3))
     print("Test reconstructed data shape:", result_all.shape)
     np.save(reconstructed_path, result_all)
     
